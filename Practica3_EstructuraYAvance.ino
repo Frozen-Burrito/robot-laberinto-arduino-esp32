@@ -17,6 +17,8 @@ const int MOTOR_RETROCEDIENDO = 2;
 // Es verdadero si el Arduino tendra conexion USB a una computadora.
 const bool usarSerial = true;
 
+const int TOLERANCIA_ROT_Z = 1;
+
 // Estructura de conveniencia para almacenar los numeros de los 3 pines de un motor.
 struct pines_motor_t 
 {
@@ -72,9 +74,8 @@ void setup()
 
 void loop() 
 {
-  // Obtener valor 
-  int movimientoActivado = digitalRead(PIN_EN_MOV);
-
+  // Revisar si se desean activar los motores
+  int movimientoActivado = HIGH;
   if (usarMPU6050)
   {
     // Configurar el MPU6050.

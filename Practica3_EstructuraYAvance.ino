@@ -9,6 +9,7 @@
 
 #define VALOR_MAX_COLOR 5000
 
+#define VEL_SONIDO 0.034
 #define DISTANCIA_MAX_CM 500
 
 // Declaracion del sensor MPU6050 con libreria de Adafruit.
@@ -60,6 +61,12 @@ typedef struct {
   const int out;
 } tcs3200_t;
 
+// Almacena los pines asignados a un sensor hc-sr04
+typedef struct {
+  const int pinTrigger;
+  const int pinEcho;
+} hc_sr04_t;
+
 // Representa un color RGB, usualmente con valores entre 0 y 255.
 typedef struct {
   const int r;
@@ -85,6 +92,8 @@ pines_motor_t motor2 = { 4, 5, 10, PWM1_CH2 }; // Numeros de pines para el motor
 
 tcs3200_t sensor_color = { 27, 26, 32, 33, 23 }; // Numeros de pines del sensor TCS 3200.
 
+hc_sr04_t sensorUltrasonico = { 16, 17 }; // Numeros de pines del sensor HC-SR04.
+
 estado_robot_t estado_actual = ROBOT_DETENIDO;
 
 ///////////////////////////////////////////////////////////////////////
@@ -98,9 +107,12 @@ void setup_tcs3200(const tcs3200_t&);
 rgb_t medir_color(const tcs3200_t&);
 color_t colorDiscretoDesdeRGB(const rgb_t&);
 
+void setupHCSR04(const hc_sr04_t&);
+float distanciaCm(const hc_sr04_t&);
+
 // Determinar un nuevo movimiento, segun el estado actual de robot y su percepcion.
 // Retorna el nuevo estado del robot.
-estado_robot_t nuevoMovimiento(const color_t&, float, const estado_robot_t&);
+estado_robot_t nuevoMovimiento(const color_t&, float, const estado_robot_t&, const float rangoColisionCm = 15.0f);
 
 void configurarMPU6050();
 
@@ -122,6 +134,8 @@ void setup()
   setupMotor(motor2);
 
   setup_tcs3200(sensor_color);
+
+  setupHCSR04(sensorUltrasonico);
 
   // Pin de activacion como entrada.
   pinMode(PIN_EN_MOV, INPUT);
@@ -172,7 +186,9 @@ void loop()
   Serial.println("Color percibido: " + String(colorPercibido));
 
   // Sensor ultrasonico.
-  float distancia = DISTANCIA_MAX_CM;
+  float distancia = distanciaCm(sensorUltrasonico);
+
+  Serial.println("Distancia (cm): " + String(distancia));
 
   // Actualizar estado actual con la percepcion.
   estado_actual = nuevoMovimiento(colorPercibido, distancia, estado_actual);
@@ -301,23 +317,36 @@ color_t colorDiscretoDesdeRGB(const rgb_t& rgb)
     return NEGRO; // 5
     
   } 
-//  else if(rojo < azul && verde > azul && rojo < 200){
-//
-//    lcd.print("Color Rojo");
-//    
-//  } else if(rojo > verde && azul > verde && verde > 50){
-//
-//    lcd.print("Color Verde");
-//    
-//  } else if(azul < rojo && azul < verde && verde < rojo){
-//
-//    lcd.print("Color Azul");
-//
-//  } else if(azul > rojo && azul > verde && verde > rojo) {
-//
-//    lcd.print("Color Amarillo");
-//    
-//  }
+}
+
+void setupHCSR04(const hc_sr04_t& sensor)
+{
+  pinMode(sensor.pinTrigger, OUTPUT);
+  pinMode(sensor.pinEcho, OUTPUT);
+}
+
+float distanciaCm(const hc_sr04_t& sensor)
+{
+  digitalWrite(sensor.pinTrigger, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(sensor.pinTrigger, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(sensor.pinTrigger, LOW);
+
+  // Espera 50 ms a que comienze el pulso, si no detecta ninguno continua.
+  float duracion = pulseIn(sensor.pinEcho, HIGH, 50000); 
+
+  if (duracion > 0)
+  {
+    float distCm = duracion * VEL_SONIDO / 2;
+
+    return constrain(distCm, 0.0, DISTANCIA_MAX_CM);
+    
+  } else 
+  {
+    return DISTANCIA_MAX_CM;
+  }
 }
 
 // Esta funcion configura el rango del acelerometro, el rango del giroscopio y el
@@ -393,19 +422,39 @@ void configurarMPU6050()
   }
 }
 
-estado_robot_t nuevoMovimiento(const color_t& color, float distancia, const estado_robot_t& estadoRobot)
+estado_robot_t nuevoMovimiento(const color_t& color, float distancia, const estado_robot_t& estadoRobot, const float rangoColisionCm)
 {
-  // Segun el color:
-  // BLANCO = Avanzar
-  // NEGRO = Detenerse, girar para mantenerse en el espacio.
-  // ROJO = 90 a la derecha
-  // AMARILLO = 90 a la izquierda
-
-  // Segun distancia
-  // Si distancia < DIST_MIN_EVITAR_COLISION = evitar obstaculo
+  estado_robot_t nuevoEstado = estadoRobot;
 
   // Si el nuevo estado es igual al estado actual y ninguna de las condiciones anteriores
   // se cumplen, seguir haciendo lo que esta haciendo.
+  switch (color)
+  {
+    case BLANCO:
+      avanzar(motor1, motor2);
+      break;
+    case NEGRO:
+      detener(motor1, motor2);
+      break;
+    case ROJO:
+      // Girar derecha 90
+      detener(motor1, motor2);
+      break;
+    case AMARILLO:
+      // Girar izquierda 90
+      detener(motor1, motor2);
+      break; 
+    default:
+      Serial.println("Advertencia: color no soportado (" + String(color) + ")");
+      break;
+  }
+
+  if (distancia < rangoColisionCm) {
+    // Evitar obstaculo.
+    detener(motor1, motor2);
+  }
+  
+  return nuevoEstado;
 }
 
 void setupMotor(const pines_motor_t& pinesMotor)
@@ -415,6 +464,30 @@ void setupMotor(const pines_motor_t& pinesMotor)
 
   pinMode(pinesMotor.pin1, OUTPUT);
   pinMode(pinesMotor.pin2, OUTPUT);
+}
+
+void avanzar(const pines_motor_t& motorA, const pines_motor_t& motorB, float duracionMinMS) 
+{
+  cambiarMovimientoMotor(motorA, MOTOR_AVANZANDO, 150);
+  cambiarMovimientoMotor(motorB, MOTOR_AVANZANDO, 150);
+
+  delay(duracionMinMS);
+}
+
+void detener(const pines_motor_t& motorA, const pines_motor_t& motorB, float duracionMinMS) 
+{
+  cambiarMovimientoMotor(motorA, MOTOR_DETENIDO);
+  cambiarMovimientoMotor(motorB, MOTOR_DETENIDO);
+
+  delay(duracionMinMS);
+}
+
+void retroceder(const pines_motor_t& motorA, const pines_motor_t& motorB, float duracionMinMS) 
+{
+  cambiarMovimientoMotor(motorA, MOTOR_RETROCEDIENDO, 150);
+  cambiarMovimientoMotor(motorB, MOTOR_RETROCEDIENDO, 150);
+
+  delay(duracionMinMS);
 }
 
 // Definicion de la funcion cambiarMovimientoMotor.

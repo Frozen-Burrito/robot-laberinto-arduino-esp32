@@ -9,6 +9,8 @@
 
 #define VALOR_MAX_COLOR 5000
 
+#define DISTANCIA_MAX_CM 500
+
 // Declaracion del sensor MPU6050 con libreria de Adafruit.
 Adafruit_MPU6050 mpu6050;
 const bool usarMPU6050 = false;
@@ -16,15 +18,29 @@ const bool usarMPU6050 = false;
 // Pin de activacion / desactivacion del movimiento.
 const int PIN_EN_MOV = 24;
 
-// Descriptores para los posibles estados de los motores.
-const int MOTOR_DETENIDO = 0;
-const int MOTOR_AVANZANDO = 1;
-const int MOTOR_RETROCEDIENDO = 2;
-
 // Es verdadero si el Arduino tendra conexion USB a una computadora.
 const bool usarSerial = true;
 
 const int TOLERANCIA_ROT_Z = 1;
+
+///////////////////////////////////////////////////////////////////////
+//                        Estructuras                                //
+///////////////////////////////////////////////////////////////////////
+
+// Posibles estados de movimiento del robot.
+typedef enum {
+  ROBOT_DETENIDO,
+  ROBOT_AVANZANDO,
+  ROBOT_GIRANDO_90_DER,
+  ROBOT_GIRANDO_90_IZQ,
+} estado_robot_t;
+
+// Posibles estados de un motor.
+typedef enum {
+  MOTOR_DETENIDO,
+  MOTOR_AVANZANDO,
+  MOTOR_RETROCEDIENDO,
+} estado_motor_t;
 
 // Estructura de conveniencia para almacenar los numeros de los 3 pines de un motor.
 struct pines_motor_t 
@@ -35,6 +51,7 @@ struct pines_motor_t
   const int canalPWM;
 };
 
+// Almacena los pines asignados a un sensor TCS3200.
 typedef struct {
   const int s0;
   const int s1;
@@ -43,32 +60,47 @@ typedef struct {
   const int out;
 } tcs3200_t;
 
+// Representa un color RGB, usualmente con valores entre 0 y 255.
 typedef struct {
   const int r;
   const int g;
   const int b;
 } rgb_t;
 
+// Colores discretos para la ejecución de acciones según percepción.
 typedef enum {
   BLANCO,
   ROJO,
   AMARILLO,
-  VERDE,
   AZUL,
+  VERDE,
   NEGRO
 } color_t;
 
+///////////////////////////////////////////////////////////////////////
+//                        Componentes                                //
+///////////////////////////////////////////////////////////////////////
 pines_motor_t motor1 = { 2, 3, 9, PWM1_CH1 }; // Numeros de pines para el motor izquierdo.
 pines_motor_t motor2 = { 4, 5, 10, PWM1_CH2 }; // Numeros de pines para el motor derecho.
 
 tcs3200_t sensor_color = { 27, 26, 32, 33, 23 }; // Numeros de pines del sensor TCS 3200.
 
+estado_robot_t estado_actual = ROBOT_DETENIDO;
+
+///////////////////////////////////////////////////////////////////////
+//               Declaración de Funciones                            //
+///////////////////////////////////////////////////////////////////////
 void setupMotor(const pines_motor_t&);
 // Declaracion de la funcion cambiarMovimientoMotor.
-void cambiarMovimientoMotor(const int, const pines_motor_t&, const int velocidad = 0);
+void cambiarMovimientoMotor(const pines_motor_t&, const estado_motor_t&, const int velocidad = 0);
 
 void setup_tcs3200(const tcs3200_t&);
 rgb_t medir_color(const tcs3200_t&);
+color_t colorDiscretoDesdeRGB(const rgb_t&);
+
+// Determinar un nuevo movimiento, segun el estado actual de robot y su percepcion.
+// Retorna el nuevo estado del robot.
+estado_robot_t nuevoMovimiento(const color_t&, float, const estado_robot_t&);
 
 void configurarMPU6050();
 
@@ -111,8 +143,6 @@ void setup()
 
 void loop() 
 {
-  // Revisar si se desean activar los motores
-  int movimientoActivado = LOW;
   if (usarMPU6050)
   {
     // Obtener valores del MPU6050.
@@ -132,32 +162,45 @@ void loop()
     }
   }
 
-  rgb_t color_detectado = medir_color(sensor_color);
+  // Percepcion de color.
+  rgb_t medidaColorRGB = medir_color(sensor_color);
 
-  Serial.println("Color: (R = " + String(color_detectado.r) + ", G = " + String(color_detectado.g) + ", B = " + String(color_detectado.b) + ")");
+  Serial.println("Color: (R = " + String(medidaColorRGB.r) + ", G = " + String(medidaColorRGB.g) + ", B = " + String(medidaColorRGB.b) + ")");
+
+  color_t colorPercibido = colorDiscretoDesdeRGB(medidaColorRGB);
+
+  Serial.println("Color percibido: " + String(colorPercibido));
+
+  // Sensor ultrasonico.
+  float distancia = DISTANCIA_MAX_CM;
+
+  // Actualizar estado actual con la percepcion.
+  estado_actual = nuevoMovimiento(colorPercibido, distancia, estado_actual);
 
   delay(1000);
 
+  // Revisar si se desean activar los motores
+  int movimientoActivado = LOW;
   if (movimientoActivado == HIGH)
   {
     // Avanzar por tres segundos en linea recta.
-    cambiarMovimientoMotor(MOTOR_AVANZANDO, motor1, 150);
-    cambiarMovimientoMotor(MOTOR_AVANZANDO, motor2, 150);
+    cambiarMovimientoMotor(motor1, MOTOR_AVANZANDO, 150);
+    cambiarMovimientoMotor(motor2, MOTOR_AVANZANDO, 150);
     delay(3000);
 
     // Detener motores por un segundo.
-    cambiarMovimientoMotor(MOTOR_DETENIDO, motor1);
-    cambiarMovimientoMotor(MOTOR_DETENIDO, motor2);
+    cambiarMovimientoMotor(motor1, MOTOR_DETENIDO);
+    cambiarMovimientoMotor(motor2, MOTOR_DETENIDO);
     delay(1000);
 
     // Retroceder por tres segundos en linea recta.
-    cambiarMovimientoMotor(MOTOR_RETROCEDIENDO, motor1, 150);
-    cambiarMovimientoMotor(MOTOR_RETROCEDIENDO, motor2, 150);
+    cambiarMovimientoMotor(motor1, MOTOR_RETROCEDIENDO, 150);
+    cambiarMovimientoMotor(motor2, MOTOR_RETROCEDIENDO, 150);
     delay(3000);
 
     // Detener motores por un segundo.
-    cambiarMovimientoMotor(MOTOR_DETENIDO, motor1);
-    cambiarMovimientoMotor(MOTOR_DETENIDO, motor2);
+    cambiarMovimientoMotor(motor1, MOTOR_DETENIDO);
+    cambiarMovimientoMotor(motor2, MOTOR_DETENIDO);
   }
 }
 
@@ -219,6 +262,62 @@ rgb_t medir_color(const tcs3200_t& sensor)
   };
   
   return colorDetectado;
+}
+
+color_t colorDiscretoDesdeRGB(const rgb_t& rgb)
+{
+  const int T = 5; // Tolerancia para percepcion de color.
+  const int T_RB = 30;
+  const int NIV_MEDIO = 220;
+  const int NIV_COLOR_BRILLANTE = 240;
+  const int NIV_MAX_COLOR_OSCURO = 160;
+  
+  const int diffGR = abs(rgb.g - rgb.r);
+  const int diffGB = abs(rgb.g - rgb.b);
+  const int diffRB = abs(rgb.r - rgb.b);
+  
+  if(rgb.g >= NIV_COLOR_BRILLANTE && diffGR < T && diffGB < T) 
+  {
+    return BLANCO; // 0
+    
+  } else if (rgb.r > NIV_MEDIO && diffRB < T_RB && rgb.g < rgb.b)
+  {
+    return ROJO; // 1
+    
+  } else if (rgb.r >= NIV_COLOR_BRILLANTE && diffGR < 20 && diffGB >= T) 
+  {
+    return AMARILLO; // 2
+    
+  } else if (rgb.b > NIV_MEDIO && rgb.g > NIV_MAX_COLOR_OSCURO && diffRB > T_RB + 5) 
+  {
+    return AZUL; // 3
+  
+  } else if (rgb.g > NIV_MEDIO - 10 && diffRB < (T * 3))
+  {
+    return VERDE; // 4
+    
+  } else {
+    
+    return NEGRO; // 5
+    
+  } 
+//  else if(rojo < azul && verde > azul && rojo < 200){
+//
+//    lcd.print("Color Rojo");
+//    
+//  } else if(rojo > verde && azul > verde && verde > 50){
+//
+//    lcd.print("Color Verde");
+//    
+//  } else if(azul < rojo && azul < verde && verde < rojo){
+//
+//    lcd.print("Color Azul");
+//
+//  } else if(azul > rojo && azul > verde && verde > rojo) {
+//
+//    lcd.print("Color Amarillo");
+//    
+//  }
 }
 
 // Esta funcion configura el rango del acelerometro, el rango del giroscopio y el
@@ -294,6 +393,21 @@ void configurarMPU6050()
   }
 }
 
+estado_robot_t nuevoMovimiento(const color_t& color, float distancia, const estado_robot_t& estadoRobot)
+{
+  // Segun el color:
+  // BLANCO = Avanzar
+  // NEGRO = Detenerse, girar para mantenerse en el espacio.
+  // ROJO = 90 a la derecha
+  // AMARILLO = 90 a la izquierda
+
+  // Segun distancia
+  // Si distancia < DIST_MIN_EVITAR_COLISION = evitar obstaculo
+
+  // Si el nuevo estado es igual al estado actual y ninguna de las condiciones anteriores
+  // se cumplen, seguir haciendo lo que esta haciendo.
+}
+
 void setupMotor(const pines_motor_t& pinesMotor)
 {
   ledcAttachPin(pinesMotor.pinEn, pinesMotor.canalPWM);
@@ -304,33 +418,34 @@ void setupMotor(const pines_motor_t& pinesMotor)
 }
 
 // Definicion de la funcion cambiarMovimientoMotor.
-void cambiarMovimientoMotor(const int nuevoEstado, const pines_motor_t& pinesMotor, const int velocidad)
+void cambiarMovimientoMotor(const pines_motor_t& motor, const estado_motor_t& nuevoEstado, const int velocidad)
 {
   // Evalua el nuevo estado al que se desea cambiar el motor.
   switch (nuevoEstado)
   {
     case MOTOR_DETENIDO:
       // Detener completamente el motor.
-      digitalWrite(pinesMotor.pin1, LOW);
-      digitalWrite(pinesMotor.pin2, LOW);
-      ledcWrite(pinesMotor.canalPWM, 0);
+      digitalWrite(motor.pin1, LOW);
+      digitalWrite(motor.pin2, LOW);
+      ledcWrite(motor.canalPWM, 0);
       break;
     case MOTOR_AVANZANDO:
       // Hacer que el motor gire, con cierta velocidad.
-      digitalWrite(pinesMotor.pin1, HIGH);
-      digitalWrite(pinesMotor.pin2, LOW);
-      ledcWrite(pinesMotor.canalPWM, velocidad);
+      digitalWrite(motor.pin1, HIGH);
+      digitalWrite(motor.pin2, LOW);
+      ledcWrite(motor.canalPWM, velocidad);
       break;
     case MOTOR_RETROCEDIENDO:
       // Hacer que el motor gire en sentido inverso, con cierta velocidad.
-      digitalWrite(pinesMotor.pin1, LOW);
-      digitalWrite(pinesMotor.pin2, HIGH);
-      ledcWrite(pinesMotor.canalPWM, velocidad);
+      digitalWrite(motor.pin1, LOW);
+      digitalWrite(motor.pin2, HIGH);
+      ledcWrite(motor.canalPWM, velocidad);
       break;
     default: // El nuevoEstado recibido no es soportado, no hacer nada.
+      Serial.println("ADVERTENCIA: Cambio de estado de motor no soportado.");
       return;
   }
 
   // Imprimir el cambio de estado en el monitor serial.
-  Serial.println("Estado del motor (conectado al pin " + String(pinesMotor.pinEn) + ") cambiado a " + String(nuevoEstado) + ", velocidad: " + String(velocidad));
+  Serial.println("Estado del motor (conectado al pin " + String(motor.pinEn) + ") cambiado a " + String(nuevoEstado) + ", velocidad: " + String(velocidad));
 }
